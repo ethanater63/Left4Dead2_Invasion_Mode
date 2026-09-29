@@ -1,0 +1,8 @@
+# The deploy target is Debian. Anything checked out with CRLF line endings
+# breaks there: bash reports "/bin/bash^M: bad interpreter" on the scripts, and
+# srcds/SourceMod parse the .cfg files with a stray CR on the end of values.
+# Force LF in the repo AND in the working tree, on every platform.
+* text=auto eol=lf
+
+# Compiled SourcePawn plugins must never be line-ending converted.
+*.smx binary

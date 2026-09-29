@@ -1,0 +1,24 @@
+// ---------------------------------------------------------------------------
+// l4d2_invasion — SQLite database entry
+//
+// This block goes INSIDE the "Databases" section of:
+//     /home/steam/l4d2/left4dead2/addons/sourcemod/configs/databases.cfg
+//
+// i.e. paste it next to the existing "default" / "storage-local" blocks,
+// before the closing brace of the "Databases" block. Do NOT replace the
+// whole databases.cfg — merge this one block into it.
+//
+// SourceMod creates the file on first use at:
+//     addons/sourcemod/data/sqlite/l4d2_invasion.sq3
+// Inspect it with:
+//     sqlite3 addons/sourcemod/data/sqlite/l4d2_invasion.sq3 ".tables"
+//
+// deploy/setup_lxc.sh and deploy/deploy_plugin.sh both append this block
+// automatically, but only when a "l4d2_invasion" entry is not already there.
+// ---------------------------------------------------------------------------
+
+	"l4d2_invasion"
+	{
+		"driver"			"sqlite"
+		"database"			"l4d2_invasion"
+	}
