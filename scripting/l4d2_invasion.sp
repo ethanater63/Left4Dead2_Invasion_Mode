@@ -73,6 +73,7 @@ ConVar g_cvCooldown;
 ConVar g_cvOptInRatio;
 ConVar g_cvMaxInvaders;
 ConVar g_cvTankFinaleOnly;
+ConVar g_cvMenu;
 
 ConVar g_cvIbReadData;      // l4dinfectedbots' own cvar, looked up at load
 
@@ -86,8 +87,10 @@ float g_fOptInRatio;
 int   g_iMaxInvaders;
 bool  g_bTankFinaleOnly;
 bool  g_bTankEnabled;       // whether the finale data config is currently loaded
+bool  g_bMenuEnabled;
 
 bool g_bOptIn[MAXPLAYERS + 1];
+bool g_bMenuShown[MAXPLAYERS + 1];      // side menu already offered this round
 bool g_bRoundActive;
 bool g_bDebug;
 bool g_bSchemaReady;        // true once a CREATE TABLE has actually come back OK
@@ -155,6 +158,7 @@ void CreateCvars()
 	g_cvOptInRatio  = CreateConVar("l4d2_invasion_optin_ratio",  "0.5",  "Fraction of human survivors who must have !invadable on.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvMaxInvaders = CreateConVar("l4d2_invasion_max_invaders", "1",    "Max simultaneous human invaders.", FCVAR_NOTIFY, true, 1.0);
 	g_cvTankFinaleOnly = CreateConVar("l4d2_invasion_tank_finale", "1", "1 = invaders can play Tank during the finale only, 0 = never.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvMenu = CreateConVar("l4d2_invasion_menu", "1", "1 = offer the side-select menu on each player's first spawn of the round.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
 	g_cvEnable.AddChangeHook(OnCvarChanged);
 	g_cvLives.AddChangeHook(OnCvarChanged);
@@ -165,6 +169,7 @@ void CreateCvars()
 	g_cvOptInRatio.AddChangeHook(OnCvarChanged);
 	g_cvMaxInvaders.AddChangeHook(OnCvarChanged);
 	g_cvTankFinaleOnly.AddChangeHook(OnCvarChanged);
+	g_cvMenu.AddChangeHook(OnCvarChanged);
 
 	AutoExecConfig(true, "l4d2_invasion");
 	CacheCvars();
@@ -172,6 +177,7 @@ void CreateCvars()
 
 void RegisterCommands()
 {
+	RegConsoleCmd("sm_invade",     Cmd_Invade,    "Reopen the side-select menu.");
 	RegConsoleCmd("sm_invadable",  Cmd_Invadable, "Toggle whether you are open to being invaded.");
 	RegConsoleCmd("sm_invstats",   Cmd_InvStats,  "Show your lifetime invasion totals.");
 	RegConsoleCmd("sm_invtop",     Cmd_InvTop,    "Show the top 10 invaders by kills.");
@@ -184,6 +190,7 @@ void RegisterCommands()
 void HookEvents()
 {
 	HookEvent("player_team",          Event_PlayerTeam);
+	HookEvent("player_spawn",         Event_PlayerSpawn);
 	HookEvent("player_death",         Event_PlayerDeath);
 	HookEvent("player_hurt",          Event_PlayerHurt);
 	HookEvent("player_incapacitated", Event_PlayerIncap);
@@ -222,6 +229,7 @@ void CacheCvars()
 	g_fOptInRatio  = g_cvOptInRatio.FloatValue;
 	g_iMaxInvaders = g_cvMaxInvaders.IntValue;
 	g_bTankFinaleOnly = g_cvTankFinaleOnly.BoolValue;
+	g_bMenuEnabled = g_cvMenu.BoolValue;
 
 	// Turning the feature off mid-campaign must not strand the finale config.
 	if (!g_bTankFinaleOnly && g_bTankEnabled)
@@ -289,6 +297,7 @@ public void OnMapEnd()
 public void OnClientConnected(int client)
 {
 	g_bOptIn[client] = false;
+	g_bMenuShown[client] = false;
 }
 
 public void OnClientDisconnect(int client)
@@ -400,6 +409,68 @@ bool InvasionsAllowed()
 	return (float(optedIn) / float(total)) >= g_fOptInRatio;
 }
 
+// Can this player invade right now, and if not, why not? The menu uses the
+// reason as the greyed-out item's label, so a player is never moved to the
+// infected team only to be bounced to spectator a tenth of a second later.
+// Mirrors the checks in Timer_CheckJoin, in the same order.
+bool CanInvade(int client, char[] reason, int maxlen)
+{
+	InvasionSession session;
+	if (GetSession(client, session))
+	{
+		strcopy(reason, maxlen, "already invading");
+		return false;
+	}
+
+	if (!g_bEnable)
+	{
+		strcopy(reason, maxlen, "disabled");
+		return false;
+	}
+
+	int remaining = GetCooldownRemaining(client);
+	if (remaining > 0)
+	{
+		char clock[16];
+		FormatClock(remaining, clock, sizeof(clock));
+		Format(reason, maxlen, "available in %s", clock);
+		return false;
+	}
+
+	int active = CountActiveInvaders();
+	if (active >= g_iMaxInvaders)
+	{
+		Format(reason, maxlen, "slots full, %d/%d", active, g_iMaxInvaders);
+		return false;
+	}
+
+	int optedIn;
+	int total = CountHumanSurvivors(optedIn);
+
+	// The invader stops counting as a survivor the moment they switch, so a
+	// lone human can never invade - there would be nobody left to invade.
+	if (total <= 1)
+	{
+		strcopy(reason, maxlen, "needs another survivor");
+		return false;
+	}
+
+	// Judge the ratio against the survivor count after this player leaves.
+	int remainingSurvivors = total - 1;
+	int remainingOptedIn = optedIn - (g_bOptIn[client] ? 1 : 0);
+	int needed = RoundToCeil(float(remainingSurvivors) * g_fOptInRatio);
+
+	if (remainingOptedIn < needed)
+	{
+		Format(reason, maxlen, "needs %d more survivor%s to opt in",
+			needed - remainingOptedIn, (needed - remainingOptedIn) == 1 ? "" : "s");
+		return false;
+	}
+
+	strcopy(reason, maxlen, "");
+	return true;
+}
+
 int GetCooldownRemaining(int client)
 {
 	char auth[32];
@@ -447,15 +518,146 @@ Action Cmd_Invadable(int client, int args)
 		return Plugin_Handled;
 	}
 
-	g_bOptIn[client] = !g_bOptIn[client];
+	SetOptIn(client, !g_bOptIn[client]);
+	return Plugin_Handled;
+}
+
+// ---------------------------------------------------------------------------
+// Side-select menu
+// ---------------------------------------------------------------------------
+// Shown on each player's first spawn of the round, so picking a side is the
+// first thing anyone does and no chat command is needed. !invade reopens it.
+// The opt-in toggle is folded into the survivor choices: people kept forgetting
+// !invadable, which is what made invasions look broken.
+
+void ShowSideMenu(int client)
+{
+	if (!g_bMenuEnabled || client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	g_bMenuShown[client] = true;
+
+	Menu menu = new Menu(MenuHandler_Side);
+	menu.SetTitle("L4D2 INVASION - choose your side");
+
+	menu.AddItem("optin",  "Survivor - open to invasion");
+	menu.AddItem("optout", "Survivor - no invasions");
+
+	char reason[96];
+	char display[128];
+	if (CanInvade(client, reason, sizeof(reason)))
+	{
+		char clock[16];
+		FormatClock(g_iTime, clock, sizeof(clock));
+		Format(display, sizeof(display), "INVADE  (%d lives / %s)", g_iLives, clock);
+		menu.AddItem("invade", display);
+	}
+	else
+	{
+		Format(display, sizeof(display), "INVADE  (%s)", reason);
+		menu.AddItem("invade", display, ITEMDRAW_DISABLED);
+	}
+
+	menu.ExitButton = true;
+	menu.Display(client, 30);
+}
+
+int MenuHandler_Side(Menu menu, MenuAction action, int client, int param2)
+{
+	if (action == MenuAction_End)
+	{
+		delete menu;
+		return 0;
+	}
+	if (action != MenuAction_Select)
+		return 0;
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+		return 0;
+
+	char choice[16];
+	menu.GetItem(param2, choice, sizeof(choice));
+
+	if (StrEqual(choice, "invade"))
+	{
+		StartInvadeFromMenu(client);
+		return 0;
+	}
+
+	SetOptIn(client, StrEqual(choice, "optin"));
+	return 0;
+}
+
+// Shared by the menu and sm_invadable so both announce identically.
+void SetOptIn(int client, bool optIn)
+{
+	g_bOptIn[client] = optIn;
 
 	int optedIn;
 	int total = CountHumanSurvivors(optedIn);
 
 	PrintToChatAll("%s \x05%N\x01 is %s invasions. (\x04%d\x01/\x04%d\x01 survivors opted in)",
-		TAG, client, g_bOptIn[client] ? "open to" : "closed to", optedIn, total);
+		TAG, client, optIn ? "open to" : "closed to", optedIn, total);
+}
 
+void StartInvadeFromMenu(int client)
+{
+	// Re-check: the menu may have been open for a while and state can change.
+	char reason[96];
+	if (!CanInvade(client, reason, sizeof(reason)))
+	{
+		PrintToChat(client, "%s Cannot invade right now (\x05%s\x01).", TAG, reason);
+		return;
+	}
+
+	// Hand the actual team move to l4dinfectedbots, which owns infected slots
+	// in coop. Our player_team gate then validates and opens the session, so
+	// there is exactly one code path for starting an invasion.
+	FakeClientCommand(client, "sm_ji");
+	DebugLog("Side menu: %N chose to invade", client);
+}
+
+Action Cmd_Invade(int client, int args)
+{
+	if (client < 1 || !IsClientInGame(client))
+		return Plugin_Handled;
+
+	if (!g_bMenuEnabled)
+	{
+		PrintToChat(client, "%s The side menu is disabled. Use \x05!ji\x01 to invade.", TAG);
+		return Plugin_Handled;
+	}
+
+	ShowSideMenu(client);
 	return Plugin_Handled;
+}
+
+void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	// Once per player per round, and never to someone already invading or
+	// already on the infected team - their choice is made.
+	if (g_bMenuShown[client] || !g_bMenuEnabled)
+		return;
+	if (GetClientTeam(client) != TEAM_SURVIVOR)
+		return;
+
+	CreateTimer(1.5, Timer_ShowMenu, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
+// A short delay: the client is not ready for a menu the instant it spawns.
+Action Timer_ShowMenu(Handle timer, int userid)
+{
+	int client = GetClientOfUserId(userid);
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+		return Plugin_Stop;
+	if (GetClientTeam(client) != TEAM_SURVIVOR || g_bMenuShown[client])
+		return Plugin_Stop;
+
+	ShowSideMenu(client);
+	return Plugin_Stop;
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +854,10 @@ void AddInvaderStat(int client, InvStat stat, int amount)
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bRoundActive = true;
+
+	// Offer the side choice again next time each player spawns.
+	for (int i = 1; i <= MAXPLAYERS; i++)
+		g_bMenuShown[i] = false;
 
 	// A new round means the finale has not started yet, including a finale
 	// restart after a wipe. Revoke Tank access until it triggers again.
