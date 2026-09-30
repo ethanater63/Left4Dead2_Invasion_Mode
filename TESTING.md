@@ -99,6 +99,23 @@ sudo systemctl start l4d2
 
 ---
 
+## Two things that will mislead you
+
+**1. You need a second human player.** `InvasionsAllowed()` requires at least one human survivor, and the invader stops counting as one the moment they switch teams. Alone, every join is refused — and survivor **bots do not count** toward the opt-in ratio. Solo you can only do checks 2, 11a and 12a; everything else needs someone else on survivors.
+
+**2. An empty server hibernates, and that looks like a broken database.** With nobody connected, `status` reports `(hibernating)` and the server stops running game frames, which stalls SourceMod's per-frame work — threaded database callbacks included. On an empty server you will see:
+
+```
+-rw-r--r-- 1 steam steam 0 ... l4d2_invasion.sq3     # 0 bytes
+tables: []                                           # no schema
+```
+
+That is **not** a fault. The schema is created as soon as a player connects. There is no `sv_hibernate*` cvar in L4D2 to turn it off. Check the database only while someone is on the server.
+
+Checks 1 and 1b have already been confirmed on the live server — start at check 2.
+
+---
+
 ## Checklist
 
 ### [ ] 1. Server boots with all three core plugins loaded

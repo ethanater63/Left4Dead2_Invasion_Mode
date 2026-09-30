@@ -76,6 +76,7 @@ int   g_iMaxInvaders;
 bool g_bOptIn[MAXPLAYERS + 1];
 bool g_bRoundActive;
 bool g_bDebug;
+bool g_bSchemaReady;        // true once a CREATE TABLE has actually come back OK
 
 StringMap g_Sessions;       // SteamID2 -> InvasionSession. Present means the invasion is active.
 StringMap g_Cooldowns;      // SteamID2 -> unix time the invasion ended.
@@ -177,6 +178,19 @@ void CacheCvars()
 	g_iCooldown    = g_cvCooldown.IntValue;
 	g_fOptInRatio  = g_cvOptInRatio.FloatValue;
 	g_iMaxInvaders = g_cvMaxInvaders.IntValue;
+}
+
+public void OnConfigsExecuted()
+{
+	// Safety net for the schema. An L4D2 server with nobody on it reports
+	// "(hibernating)" in `status` and stops running game frames, which stalls
+	// everything SourceMod dispatches per-frame - threaded database callbacks
+	// included. A connect issued from OnPluginStart on an empty server therefore
+	// sits pending, leaving a 0-byte database with no tables until someone joins.
+	// That is harmless in practice, but retrying here means the schema is in
+	// place from the first map load rather than depending on connect timing.
+	if (!g_bSchemaReady)
+		Database.Connect(OnDbConnect, DB_CONFIG);
 }
 
 public void OnMapEnd()
@@ -677,7 +691,18 @@ void OnDbConnect(Database db, const char[] error, any data)
 void OnSchemaReady(Database db, DBResultSet results, const char[] error, any data)
 {
 	if (results == null)
+	{
 		LogError("Invasion schema creation failed: %s", error);
+		return;
+	}
+
+	// Only now is the database genuinely usable. OnConfigsExecuted watches this
+	// flag and keeps retrying the connect until it flips.
+	if (!g_bSchemaReady)
+	{
+		g_bSchemaReady = true;
+		DebugLog("Database schema confirmed, stats will be saved.");
+	}
 }
 
 void SaveSession(const char[] auth, const char[] clientName, const char[] reason, InvasionSession session)

@@ -15,7 +15,7 @@ Verified as of 2026-09-28. Use exactly these; the plugin is built against them.
 | L4D2 Dedicated Server | SteamCMD app `222860` | `steamcmd +app_update 222860 validate` |
 | Metamod:Source | 1.12.0 build 1227 (stable) | `https://mms.alliedmods.net/mmsdrop/1.12/mmsource-1.12.0-git1227-linux.tar.gz` |
 | SourceMod | 1.12.0 build 7253 (stable) | `https://sm.alliedmods.net/smdrop/1.12/sourcemod-1.12.0-git7253-linux.tar.gz` |
-| Left 4 DHooks Direct | 1.168 | `https://github.com/SilvDev/Left4DHooks` (branch `master`) |
+| Left 4 DHooks Direct | `master` — **1.168 when pinned, 1.169 as installed** (see note) | `https://github.com/SilvDev/Left4DHooks` (branch `master`) |
 | l4dinfectedbots | `master` @ 2026-09-28 (no tagged releases; ships a prebuilt `.smx`) | `https://github.com/fbef0102/L4D1_2-Plugins/tree/master/l4dinfectedbots` |
 | Source Scramble (extension) | 0.8.2.2 — use `package.tar.gz`, **not** `-api10` | `https://github.com/nosoop/SMExt-SourceScramble/releases` |
 | MoYu companion fixes | release tag `20260925134758`, asset `MoYu-Plugins-1.12.zip` | `https://github.com/Target5150/MoYu_Server_Stupid_Plugins/releases` |
@@ -27,6 +27,7 @@ See [Known issues (b)](#b-companion-plugins--all-six-installed-zombie_spawn_fix-
 Two notes that affect install:
 
 - **Left 4 DHooks Direct 1.168 needs no separate extension.** It is plugin + gamedata + data config only (`left4dhooks.smx`, `gamedata/left4dhooks.txt`, and its `data/left4dhooks.*.cfg` files). Older install instructions referencing a `left4dhooks.ext.so` do not apply to this version.
+- **Left4DHooks is not truly pinned.** Upstream publishes no tagged releases, so `setup_lxc.sh` fetches the prebuilt `.smx` from `master`. It was 1.168 when this repo was written; the live server reports **1.169**, because master moved. The includes in `scripting/include/` are still the 1.168 copies. That mismatch is benign — the natives we use (`L4D_GetPlayerSpawnTime`, `L4D_SetPlayerSpawnTime`) are unchanged — but if a future master bumps further and the plugin misbehaves, re-copy the includes from the same commit the server is running.
 - **l4dinfectedbots is distributed as a prebuilt `.smx`.** We do not compile it, so its own compile-time dependencies (Multi Colors include, etc.) are not needed anywhere in this repo or on the server.
 
 ---
@@ -259,16 +260,33 @@ Per upstream, infected limit + survivors + spectators must not exceed **31**, an
 
 ---
 
+## Verified on a live server
+
+Confirmed on Debian 12 / Proxmox against L4D2 build `2.2.4.3 10097`, SourceMod 1.12.0-git7253:
+
+- **Checks 1 and 1b pass.** All 26 plugins load, including all ten of ours plus the Source Scramble extension and the SQLite driver. The only load error is stock `nextmap.smx`, which is genuinely incompatible with L4D2 and is moved to `plugins/disabled/`.
+- **All four `zombie_spawn_fix` memory patches enable** against this game build — four `Enabled patch:` lines, no `Failed to verify patch`.
+- **The SteamCMD "Missing configuration" fallback is load-bearing.** The real install failed exactly as CLAUDE.md predicted (`ERROR! Failed to install app '222860' (Missing configuration)`) and the automatic windows→linux retry recovered it. Without that fallback the install dead-ends.
+- **The SQLite upsert works.** `INSERT ... ON CONFLICT(steamid) DO UPDATE` was exercised on the bundled SQLite: totals accumulate correctly across repeat writes.
+- **All 8 cvars register** with the documented defaults, and `cfg/sourcemod/l4d2_invasion.cfg` is generated.
+
+### Gotcha: an empty server hibernates
+
+An L4D2 server with nobody on it reports `(hibernating)` in `status` and stops running game frames. That stalls everything SourceMod dispatches per-frame, **threaded database callbacks included** — so on an empty server the SQLite file sits at 0 bytes with no tables, and `OnConfigsExecuted` never fires. Nothing is wrong; the schema is created the moment a player connects. There is no `sv_hibernate*` cvar in L4D2 to disable it.
+
+This is worth knowing before concluding the database is broken. `OnConfigsExecuted` retries the connect as a safety net so the schema lands on the first map load with a player.
+
+---
+
 ## Unverified / needs in-game confirmation
 
-Everything below is design intent that has not been observed on a live server. Checks 1–13 in [TESTING.md](TESTING.md) are what settles them.
+Everything below still needs a live invasion with two human players. Checks 2–13 in [TESTING.md](TESTING.md) are what settle them.
 
 1. **Gate timing.** Whether the 0.1s-after-`player_team` timer lands after l4dinfectedbots' own join handling in *every* case, including late joins, joins during a transition, and joins while a round is ending. If it ever lands first, the gate could be overridden.
 2. **`player_death` coverage for infected.** Whether `player_death` fires reliably for a human infected who dies **as a ghost** or to **world damage** (fall, drowning, crush). If it does not, those deaths would not count against the lives budget.
-3. **SQLite upsert support.** Whether `INSERT ... ON CONFLICT(steamid) DO UPDATE` runs on the SQLite build bundled with SourceMod 1.12. It requires SQLite >= 3.24, which 1.12 ships, but it is untested here. Failure mode would be a logged SQL error with the `players` totals never incrementing while `invasions` rows still insert.
-4. **Hint intrusiveness.** Whether `PrintHintText` once per second is too intrusive in practice (hint flicker / audible tick on some clients). May need to drop to a lower refresh rate or a different HUD channel.
-5. **Respawn override behavior** — see [Known issues (a)](#a-l4d_setplayerspawntime-does-not-control-the-coop-respawn-delay). The measured respawn delay from check 5 confirms or refutes the source reading.
-6. **Companion plugin signatures.** The five auto-installed companions and the Source Scramble extension were verified as genuine binaries (valid SMX magic; the extension is a 32-bit i386 ELF, matching the L4D2 Linux server), but they have not been *loaded* against this game build. Gamedata signatures for memory-patching plugins go stale after Valve updates, so `l4d_unrestrict_panic_battlefield` and `l4d2_scripted_tank_stage_fix` are the likeliest to log signature errors. Check 1b covers this. None of them is required for `l4d2_invasion` to work — if one fails to load, remove it.
+3. **Hint intrusiveness.** Whether `PrintHintText` once per second is too intrusive in practice (hint flicker / audible tick on some clients). May need to drop to a lower refresh rate or a different HUD channel.
+4. **Respawn override behavior** — see [Known issues (a)](#a-l4d_setplayerspawntime-does-not-control-the-coop-respawn-delay). The measured respawn delay from check 5 confirms or refutes the source reading.
+5. **Two human players are mandatory for testing.** `InvasionsAllowed()` requires at least one human survivor, and the invader stops counting as one the moment they switch teams. Solo, every join is refused — survivor *bots* do not count toward the opt-in ratio. Only checks 2, 11a and 12a are testable alone.
 
 ---
 
