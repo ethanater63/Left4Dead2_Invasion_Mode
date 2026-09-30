@@ -307,3 +307,28 @@ l4d2-invasion/
     ├── setup_lxc.sh                      (runs inside a Debian 12 LXC; idempotent)
     └── deploy_plugin.sh                  (rsync .smx/cfg, restart l4d2, tail error log)
 ```
+
+---
+
+## License
+
+**GPLv3.** See [LICENSE](LICENSE) for the full text.
+
+Copyleft is not a stylistic choice here — this repo redistributes GPLv3 code, so the whole work has to be GPLv3. Take it, fork it, run it, change it, ship your own version; the one condition is that derivatives stay GPLv3 and keep the source available.
+
+### Third-party components
+
+Only the first three are actually redistributed in this repo. The rest are downloaded at install time by `deploy/setup_lxc.sh` and are never part of this source tree, so their licenses govern them on your server, not here.
+
+| Component | In this repo? | License |
+|---|---|---|
+| `scripting/l4d2_invasion.sp` | yes — our code | GPLv3 |
+| `scripting/include/left4dhooks*.inc` (5 files) | yes — vendored | GPLv3 ([Left4DHooks](https://github.com/SilvDev/Left4DHooks) ships a verbatim GPLv3 `LICENSE`) |
+| `scripting/include/sourcescramble.inc` | yes — vendored | GPL-3.0 ([SMExt-SourceScramble](https://github.com/nosoop/SMExt-SourceScramble)) |
+| `third_party/zombie_spawn_fix/` | yes — vendored | **not stated** — see the caveat below |
+| Source Scramble extension binary | no — downloaded at install | GPL-3.0 |
+| MoYu companion plugins | no — downloaded at install | see [MoYu_Server_Stupid_Plugins](https://github.com/Target5150/MoYu_Server_Stupid_Plugins) |
+| l4dinfectedbots, `l4d_ghost_spawn_exploit`, `spawn_infected_nolimit` | no — downloaded at install | see [L4D1_2-Plugins](https://github.com/fbef0102/L4D1_2-Plugins) |
+| Metamod:Source, SourceMod | no — downloaded at install | their own terms |
+
+**Caveat on `zombie_spawn_fix`.** Its source carries **no license header**, and its author (sorallll) has no public repos, so there is no upstream license file to point at. AlliedModders plugins are GPL by convention and it is freely distributed on [thread 333351](https://forums.alliedmods.net/showthread.php?t=333351), but that convention is not a licence grant in writing. It is vendored here only because Cloudflare makes it undownloadable by script — it is not our code, and we claim nothing over it. If you want the repo unambiguously clean, delete `third_party/zombie_spawn_fix/` and `plugins/zombie_spawn_fix.smx`; `build.sh` skips it when absent and nothing else depends on it.
