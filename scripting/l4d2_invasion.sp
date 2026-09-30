@@ -38,6 +38,15 @@
 #define TAG                 "\x04[INVASION]\x01"
 #define DB_CONFIG           "l4d2_invasion"
 
+// Tanks are made playable only during the finale by swapping which data config
+// l4dinfectedbots reads. That plugin exposes no cvar for coop_versus_tank_playable
+// - it is a KeyValues key - but l4d_infectedbots_read_data has a change hook that
+// live-reloads the whole data config. So we ship two configs that differ only in
+// that one key and flip between them. l4dinfectedbots itself is never modified.
+#define IB_DATA_CVAR        "l4d_infectedbots_read_data"
+#define IB_DATA_FINALE      "coop_finale"       // data/l4dinfectedbots/coop_finale.cfg
+#define IB_DATA_DEFAULT     ""                  // empty = <gamemode>.cfg, i.e. coop.cfg
+
 enum struct InvasionSession
 {
 	int livesUsed;
@@ -63,6 +72,9 @@ ConVar g_cvEndAction;
 ConVar g_cvCooldown;
 ConVar g_cvOptInRatio;
 ConVar g_cvMaxInvaders;
+ConVar g_cvTankFinaleOnly;
+
+ConVar g_cvIbReadData;      // l4dinfectedbots' own cvar, looked up at load
 
 bool  g_bEnable;
 int   g_iLives;
@@ -72,6 +84,8 @@ int   g_iEndAction;
 int   g_iCooldown;
 float g_fOptInRatio;
 int   g_iMaxInvaders;
+bool  g_bTankFinaleOnly;
+bool  g_bTankEnabled;       // whether the finale data config is currently loaded
 
 bool g_bOptIn[MAXPLAYERS + 1];
 bool g_bRoundActive;
@@ -107,6 +121,27 @@ public void OnPluginStart()
 
 	CreateTimer(1.0, Timer_Invasion, 0, TIMER_REPEAT);
 	Database.Connect(OnDbConnect, DB_CONFIG);
+
+	// l4dinfectedbots may load after us, so this can be null here; OnAllPluginsLoaded
+	// picks it up. Without it, Tank swapping is skipped rather than erroring.
+	g_cvIbReadData = FindConVar(IB_DATA_CVAR);
+}
+
+public void OnAllPluginsLoaded()
+{
+	if (g_cvIbReadData == null)
+		g_cvIbReadData = FindConVar(IB_DATA_CVAR);
+
+	if (g_cvIbReadData == null)
+		LogError("Could not find \"%s\". l4dinfectedbots may not be loaded - finale-only Tank access is disabled.", IB_DATA_CVAR);
+	else
+		SetTankPlayable(false);      // always start a session with Tanks off
+}
+
+public void OnPluginEnd()
+{
+	// Never leave the finale data config loaded behind us.
+	SetTankPlayable(false);
 }
 
 void CreateCvars()
@@ -119,6 +154,7 @@ void CreateCvars()
 	g_cvCooldown    = CreateConVar("l4d2_invasion_cooldown",     "600",  "Seconds before the same SteamID can invade again.", FCVAR_NOTIFY, true, 0.0);
 	g_cvOptInRatio  = CreateConVar("l4d2_invasion_optin_ratio",  "0.5",  "Fraction of human survivors who must have !invadable on.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvMaxInvaders = CreateConVar("l4d2_invasion_max_invaders", "1",    "Max simultaneous human invaders.", FCVAR_NOTIFY, true, 1.0);
+	g_cvTankFinaleOnly = CreateConVar("l4d2_invasion_tank_finale", "1", "1 = invaders can play Tank during the finale only, 0 = never.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
 	g_cvEnable.AddChangeHook(OnCvarChanged);
 	g_cvLives.AddChangeHook(OnCvarChanged);
@@ -128,6 +164,7 @@ void CreateCvars()
 	g_cvCooldown.AddChangeHook(OnCvarChanged);
 	g_cvOptInRatio.AddChangeHook(OnCvarChanged);
 	g_cvMaxInvaders.AddChangeHook(OnCvarChanged);
+	g_cvTankFinaleOnly.AddChangeHook(OnCvarChanged);
 
 	AutoExecConfig(true, "l4d2_invasion");
 	CacheCvars();
@@ -161,6 +198,12 @@ void HookEvents()
 	HookEvent("map_transition",       Event_RoundEnd);
 	HookEvent("mission_lost",         Event_RoundEnd);
 	HookEvent("finale_win",           Event_RoundEnd);
+
+	// Tank access is granted on either finale trigger. Not every finale map
+	// fires "finale_start", but they all fire "finale_radio_start", so both are
+	// hooked; SetTankPlayable is a no-op when it is already enabled.
+	HookEvent("finale_start",         Event_FinaleStart);
+	HookEvent("finale_radio_start",   Event_FinaleStart);
 }
 
 void OnCvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -178,6 +221,51 @@ void CacheCvars()
 	g_iCooldown    = g_cvCooldown.IntValue;
 	g_fOptInRatio  = g_cvOptInRatio.FloatValue;
 	g_iMaxInvaders = g_cvMaxInvaders.IntValue;
+	g_bTankFinaleOnly = g_cvTankFinaleOnly.BoolValue;
+
+	// Turning the feature off mid-campaign must not strand the finale config.
+	if (!g_bTankFinaleOnly && g_bTankEnabled)
+		SetTankPlayable(false);
+}
+
+// ---------------------------------------------------------------------------
+// Playable Tank, finale only
+// ---------------------------------------------------------------------------
+
+// Swap which data config l4dinfectedbots reads. The two files are identical
+// except for coop_versus_tank_playable, so this toggles Tank access and nothing
+// else. Writing the cvar fires l4dinfectedbots' own change hook, which reloads.
+void SetTankPlayable(bool enable)
+{
+	if (g_cvIbReadData == null)
+		return;
+
+	char current[64];
+	g_cvIbReadData.GetString(current, sizeof(current));
+
+	char wanted[64];
+	strcopy(wanted, sizeof(wanted), enable ? IB_DATA_FINALE : IB_DATA_DEFAULT);
+
+	// Reloading the data config is not free, so only write on an actual change.
+	if (StrEqual(current, wanted))
+	{
+		g_bTankEnabled = enable;
+		return;
+	}
+
+	g_cvIbReadData.SetString(wanted);
+	g_bTankEnabled = enable;
+	DebugLog("Playable Tank %s (l4dinfectedbots data config -> \"%s\")",
+		enable ? "ENABLED for the finale" : "disabled", wanted);
+}
+
+void Event_FinaleStart(Event event, const char[] name, bool dontBroadcast)
+{
+	if (!g_bTankFinaleOnly || g_bTankEnabled)
+		return;
+
+	SetTankPlayable(true);
+	PrintToChatAll("%s \x05Finale!\x01 Invaders can now become the Tank.", TAG);
 }
 
 public void OnConfigsExecuted()
@@ -564,6 +652,11 @@ void AddInvaderStat(int client, InvStat stat, int amount)
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bRoundActive = true;
+
+	// A new round means the finale has not started yet, including a finale
+	// restart after a wipe. Revoke Tank access until it triggers again.
+	if (g_bTankFinaleOnly)
+		SetTankPlayable(false);
 }
 
 void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
