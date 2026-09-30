@@ -115,12 +115,26 @@ Start the server, then run `sm plugins list` in the console.
 
 Run `sm exts list` and `sm plugins list`.
 
-**Pass condition:** `sm exts list` shows **Source Scramble** as running, and `sm plugins list` also shows `l4d_unrestrict_panic_battlefield`, `l4d_fix_deathfall_cam`, `l4d2_scripted_tank_stage_fix`, `l4d_ghost_spawn_exploit`, `spawn_infected_nolimit` and `sourcescramble_manager` loaded, with no new gamedata/signature errors in `errors_*.log`.
+**Pass condition:** `sm exts list` shows **Source Scramble** as running, and `sm plugins list` shows all seven companions loaded: `l4d_unrestrict_panic_battlefield`, `l4d_fix_deathfall_cam`, `l4d2_scripted_tank_stage_fix`, `l4d_ghost_spawn_exploit`, `spawn_infected_nolimit`, `sourcescramble_manager` and `zombie_spawn_fix` — with no new gamedata/signature errors in `errors_*.log`.
 
-Two expected exceptions, neither a failure:
+**`zombie_spawn_fix` needs a specific extra check.** It memory-patches the game, so its offsets go stale after Valve server updates. On success it prints one line per patch to the server console:
 
-- `zombie_spawn_fix` will be **absent** unless you installed it by hand — `setup_lxc.sh` prints a warning about it (it is a Cloudflare-protected forum attachment). See README "Known issues (b)".
-- If you did add `zombie_spawn_fix`, check `errors_*.log` specifically for **patch verification** errors; users report these after game updates. If they appear, remove it — nothing else depends on it.
+```
+Enabled patch: "ZombieManager::CanZombieSpawnHere::IsInTransitionCondition"
+Enabled patch: "CTerrorPlayer::OnPreThinkGhostState::IsInTransitionCondition"
+Enabled patch: "CTerrorPlayer::OnPreThinkGhostState::SpawnDisabledCondition"
+Enabled patch: "ZombieManager::AccumulateSpawnAreaCollection::EnforceFinaleNavSpawnRulesCondition"
+```
+
+On failure it does **not** crash — it logs `Failed to verify patch: "<name>"` per patch and keeps running with that patch off. Grep for it:
+
+```bash
+grep -n "Failed to verify patch" /home/steam/l4d2/left4dead2/addons/sourcemod/logs/errors_*.log
+```
+
+All four enabled = pass. Any failures mean the gamedata is stale against your game build: refresh `third_party/zombie_spawn_fix/gamedata/zombie_spawn_fix.txt` from [thread 333351](https://forums.alliedmods.net/showthread.php?t=333351), or delete the plugin. Nothing else depends on it.
+
+If it fails to load entirely with `Missing required file`, the gamedata did not get deployed — check `addons/sourcemod/gamedata/zombie_spawn_fix.txt` exists.
 
 A signature/gamedata failure in any companion should not stop `l4d2_invasion` from working. If one fails to load, note which and carry on with the rest of the checklist.
 

@@ -58,6 +58,21 @@ log "rsync plugins/*.smx -> addons/sourcemod/plugins/"
 rsync -av --checksum "${REPO_ROOT}"/plugins/*.smx "${L4D2_HOST}:${SM_PATH}/plugins/"
 
 # ---------------------------------------------------------------------------
+# Third-party gamedata
+# ---------------------------------------------------------------------------
+# zombie_spawn_fix is built from third_party/ into plugins/, so the rsync above
+# already ships its .smx - but it SetFailStates without its gamedata, so that
+# has to go too. Every other companion plugin is installed server-side by
+# setup_lxc.sh along with its own gamedata, so nothing else belongs here.
+if compgen -G "${REPO_ROOT}/third_party/*/gamedata/*.txt" >/dev/null; then
+    log "rsync third_party gamedata -> addons/sourcemod/gamedata/"
+    rsync -av --checksum "${REPO_ROOT}"/third_party/*/gamedata/*.txt \
+        "${L4D2_HOST}:${SM_PATH}/gamedata/"
+else
+    info "no third_party gamedata to deploy"
+fi
+
+# ---------------------------------------------------------------------------
 # Configs
 # ---------------------------------------------------------------------------
 log "rsync configs"

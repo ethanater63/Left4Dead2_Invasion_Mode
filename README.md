@@ -20,9 +20,9 @@ Verified as of 2026-09-28. Use exactly these; the plugin is built against them.
 | Source Scramble (extension) | 0.8.2.2 — use `package.tar.gz`, **not** `-api10` | `https://github.com/nosoop/SMExt-SourceScramble/releases` |
 | MoYu companion fixes | release tag `20260925134758`, asset `MoYu-Plugins-1.12.zip` | `https://github.com/Target5150/MoYu_Server_Stupid_Plugins/releases` |
 | fbef0102 companion fixes | `master` @ 2026-09-28 (prebuilt `.smx`) | `l4d_ghost_spawn_exploit`, `spawn_infected_nolimit` |
-| `zombie_spawn_fix` | latest forum attachment — **manual install** | [AlliedModders thread 333351](https://forums.alliedmods.net/showthread.php?t=333351) |
+| `zombie_spawn_fix` | v1.0.9 — vendored in `third_party/`, no mirror exists | [AlliedModders thread 333351](https://forums.alliedmods.net/showthread.php?t=333351) |
 
-See [Known issues (b)](#b-companion-plugins--five-installed-automatically-zombie_spawn_fix-is-manual) for what each companion fixes and why `zombie_spawn_fix` cannot be scripted.
+See [Known issues (b)](#b-companion-plugins--all-six-installed-zombie_spawn_fix-is-vendored) for what each companion fixes and why `zombie_spawn_fix` is vendored rather than downloaded.
 
 Two notes that affect install:
 
@@ -42,7 +42,7 @@ Run `deploy/setup_lxc.sh` inside the LXC. It is idempotent — safe to re-run. I
 - installs SteamCMD to `/home/steam/steamcmd` and the game server to `/home/steam/l4d2`
 - extracts Metamod:Source and SourceMod into `/home/steam/l4d2/left4dead2/`
 - installs Left 4 DHooks Direct and l4dinfectedbots (plugins, gamedata, data configs)
-- installs the Source Scramble extension and the five scriptable companion plugins, then warns about the one that must be installed by hand — see [Known issues (b)](#b-companion-plugins--five-installed-automatically-zombie_spawn_fix-is-manual)
+- installs the Source Scramble extension and all six companion plugins, including `zombie_spawn_fix` from `third_party/` — see [Known issues (b)](#b-companion-plugins--all-six-installed-zombie_spawn_fix-is-vendored)
 - writes and enables the `l4d2.service` systemd unit:
   `./srcds_run -game left4dead2 -console -port 27015 +map c1m1_hotel +maxplayers 8 -tickrate 30`, running as `steam`, with `Restart=on-failure`
 - opens UDP/TCP 27015
@@ -91,22 +91,33 @@ Human infected in coop is enabled in l4dinfectedbots' **data config**, not by cv
 spcomp scripting/l4d2_invasion.sp -i scripting/include -o plugins/l4d2_invasion.smx
 ```
 
-`build.sh` wraps exactly that. Requirements:
+`build.sh` wraps exactly that, and also compiles the one vendored companion:
+
+```bash
+spcomp third_party/zombie_spawn_fix/scripting/zombie_spawn_fix.sp \
+       -i scripting/include -o plugins/zombie_spawn_fix.smx
+```
+
+Requirements:
 
 - Use `spcomp` from the **same SourceMod version as the server** — 1.12.0-git7253. A compiler from a different branch can produce a plugin the server refuses to load.
-- The build must be warning-free. Warnings are treated as failures.
+- The build must be warning-free. Warnings are treated as failures, for both targets.
+- `zombie_spawn_fix` is skipped without failing the build if `third_party/` is not checked out.
 
-`scripting/include/` holds the includes copied out of Left 4 DHooks Direct 1.168:
+`scripting/include/` holds:
 
-| File | Role |
-|---|---|
-| `left4dhooks.inc` | main include |
-| `left4dhooks_anim.inc` | dependency |
-| `left4dhooks_silver.inc` | dependency |
-| `left4dhooks_lux_library.inc` | dependency |
-| `left4dhooks_stocks.inc` | dependency |
+| File | Role | From |
+|---|---|---|
+| `left4dhooks.inc` | main include | Left 4 DHooks Direct 1.168 |
+| `left4dhooks_anim.inc` | dependency | Left 4 DHooks Direct 1.168 |
+| `left4dhooks_silver.inc` | dependency | Left 4 DHooks Direct 1.168 |
+| `left4dhooks_lux_library.inc` | dependency | Left 4 DHooks Direct 1.168 |
+| `left4dhooks_stocks.inc` | dependency | Left 4 DHooks Direct 1.168 |
+| `sourcescramble.inc` | needed only by `zombie_spawn_fix` | Source Scramble 0.8.2.2 |
 
 `sourcemod.inc` and `sdktools.inc` come from the SourceMod compiler's own include path, not from this repo.
+
+**`spcomp` output is not byte-reproducible.** Consecutive builds of identical source can differ by a byte or two, so the committed `.smx` files under `plugins/` will intermittently show as modified after a rebuild with no source change behind it. `git checkout -- plugins/` discards that noise.
 
 ---
 
@@ -201,9 +212,9 @@ Its single `L4D_SetPlayerSpawnTime()` call sits in its `ghost_spawn_time` handle
 - Enable `sm_inv_debug` to see both the requested and the effective values logged (once per death).
 - Per CLAUDE.md, **l4dinfectedbots is not patched.** This is documented, not worked around.
 
-### (b) Companion plugins — five installed automatically, `zombie_spawn_fix` is manual
+### (b) Companion plugins — all six installed, `zombie_spawn_fix` is vendored
 
-These sit outside CLAUDE.md's stack table but are recommended by the l4dinfectedbots readme, and they fix problems that bite specifically when a human plays infected in coop. `deploy/setup_lxc.sh` installs all of them except `zombie_spawn_fix` (see below).
+These sit outside CLAUDE.md's stack table but are recommended by the l4dinfectedbots readme, and they fix problems that bite specifically when a human plays infected in coop. `deploy/setup_lxc.sh` installs all six.
 
 | Plugin | What it fixes | Installed by |
 |---|---|---|
@@ -212,19 +223,25 @@ These sit outside CLAUDE.md's stack table but are recommended by the l4dinfected
 | `l4d2_scripted_tank_stage_fix` | Scripted tank stages misbehaving in finales | `setup_lxc.sh` (MoYu release zip) |
 | `l4d_ghost_spawn_exploit` | A ghost-spawn/teleport exploit for human infected | `setup_lxc.sh` (prebuilt `.smx` from repo) |
 | `spawn_infected_nolimit` | Provides the API l4dinfectedbots uses to spawn SI past director limits | `setup_lxc.sh` (prebuilt `.smx` from repo) |
-| `zombie_spawn_fix` | Special infected failing to spawn at all in some situations | **manual — see below** |
+| `zombie_spawn_fix` | Special infected failing to spawn at all in some situations | `setup_lxc.sh`, from `third_party/` in this repo (see below) |
 
 **Source Scramble is a hard dependency.** `l4d_unrestrict_panic_battlefield` requires the [Source Scramble](https://github.com/nosoop/SMExt-SourceScramble) memory-patching extension, so `setup_lxc.sh` installs it (`0.8.2.2`, `extensions/sourcescramble.ext.so` plus `sourcescramble_manager.smx`). Upstream's release notes are explicit that SourceMod 1.12 stable takes the plain `package.tar.gz`, **not** the `-api10` package (that one is for SM 1.13.0.7451+). Do not swap them.
 
 `l4d2_scripted_tank_stage_fix` requires DHooks, which ships with SourceMod 1.12 — nothing extra to install.
 
-**Why `zombie_spawn_fix` cannot be automated.** It is published only as an attachment on [AlliedModders thread 333351](https://forums.alliedmods.net/showthread.php?t=333351), and that site sits behind a Cloudflare challenge — a scripted download receives an HTML challenge page instead of the plugin. `setup_lxc.sh` therefore prints a warning with these steps instead of failing:
+**`zombie_spawn_fix` is vendored in this repo.** It is published only as an attachment on [AlliedModders thread 333351](https://forums.alliedmods.net/showthread.php?t=333351), and that site sits behind a Cloudflare challenge — a scripted download receives an HTML challenge page, not the plugin. There is no GitHub mirror (the author has no public repos). So its source and gamedata are committed here instead:
 
-1. Open the thread in a browser and download the latest `zombie_spawn_fix` `.smx` and its gamedata `.txt`.
-2. Copy them into `addons/sourcemod/plugins/` and `addons/sourcemod/gamedata/`.
-3. `chown steam:steam` both, then `systemctl restart l4d2`.
+```
+third_party/zombie_spawn_fix/
+├── scripting/zombie_spawn_fix.sp      v1.0.9, sorallll & Psyk0tik (Crasher_3637)
+└── gamedata/zombie_spawn_fix.txt      memory-patch offsets + signatures
+```
 
-Its Source Scramble dependency is already installed, so that is the only remaining work. Note that users on the thread report patch-verification errors after game updates, so check `errors_*.log` after adding it. The setup script skips the warning entirely if it finds `zombie_spawn_fix.smx` already present, so re-running is safe.
+`build.sh` compiles it to `plugins/zombie_spawn_fix.smx` (it needs `sourcescramble.inc`, which is in `scripting/include/`), and both `setup_lxc.sh` and `deploy_plugin.sh` install the `.smx` plus the gamedata. Nothing manual is left.
+
+The gamedata is **not optional** — the plugin calls `SetFailState` and refuses to load without it. The four `MemPatches` entries in the gamedata were checked against the four patch names in the source, and all three referenced signatures are defined.
+
+**It patches game memory, so it is the most fragile thing installed.** Its offsets and byte signatures go stale whenever Valve ships a server update. On failure it does *not* crash — it logs `Failed to verify patch: "<name>"` per patch and carries on. After any game update, grep `errors_*.log` for that string; if it appears, either update `third_party/zombie_spawn_fix/gamedata/zombie_spawn_fix.txt` from the forum thread or delete the plugin. Nothing else depends on it.
 
 The MoYu plugins are pinned to release tag `20260925134758` (`MoYu-Plugins-1.12.zip`), because that repo ships no prebuilt `.smx` in its source tree — only in release zips.
 
@@ -270,9 +287,15 @@ l4d2-invasion/
 │       ├── left4dhooks_anim.inc
 │       ├── left4dhooks_silver.inc
 │       ├── left4dhooks_lux_library.inc
-│       └── left4dhooks_stocks.inc
+│       ├── left4dhooks_stocks.inc
+│       └── sourcescramble.inc            (to compile zombie_spawn_fix; from Source Scramble 0.8.2.2)
+├── third_party/
+│   └── zombie_spawn_fix/                 (vendored: forum-only, Cloudflare-blocked, no mirror)
+│       ├── scripting/zombie_spawn_fix.sp
+│       └── gamedata/zombie_spawn_fix.txt
 ├── plugins/                              (compiled .smx output)
-│   └── l4d2_invasion.smx
+│   ├── l4d2_invasion.smx
+│   └── zombie_spawn_fix.smx
 ├── cfg/
 │   ├── server.cfg
 │   └── sourcemod/

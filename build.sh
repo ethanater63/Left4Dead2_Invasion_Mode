@@ -69,21 +69,41 @@ fi
 mkdir -p "$REPO_ROOT/plugins"
 
 echo "==> spcomp: $SPCOMP"
-echo "==> Compiling l4d2_invasion.sp"
 
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 
-if ! "$SPCOMP" "$SRC" -i "$INC" -o "$OUT" 2>&1 | tee "$log"; then
-	echo "BUILD FAILED: spcomp returned a non-zero status." >&2
-	exit 1
+# Compile one .sp to one .smx, failing the build on any warning.
+compile() {
+	local src="$1" out="$2"
+
+	echo "==> Compiling $(basename "$src")"
+	if ! "$SPCOMP" "$src" -i "$INC" -o "$out" 2>&1 | tee "$log"; then
+		echo "BUILD FAILED: spcomp returned a non-zero status for $(basename "$src")." >&2
+		exit 1
+	fi
+	if grep -qiE "^.*: (warning|error) [0-9]+" "$log"; then
+		echo "BUILD FAILED: spcomp reported warnings or errors (zero-warning build required)." >&2
+		exit 1
+	fi
+	[ -s "$out" ] || { echo "BUILD FAILED: $out was not produced." >&2; exit 1; }
+	echo "    OK: $out"
+}
+
+compile "$SRC" "$OUT"
+
+# zombie_spawn_fix is the one companion plugin that ships as source only: it is
+# published as an AlliedModders forum attachment (thread 333351), which sits
+# behind Cloudflare and cannot be fetched by script, so the .sp and its gamedata
+# live in this repo under third_party/ and we compile it here. It needs
+# sourcescramble.inc, which is in scripting/include/. Skipped without failing
+# the build if the source is not checked out.
+ZSF_SRC="$REPO_ROOT/third_party/zombie_spawn_fix/scripting/zombie_spawn_fix.sp"
+ZSF_OUT="$REPO_ROOT/plugins/zombie_spawn_fix.smx"
+if [ -f "$ZSF_SRC" ]; then
+	compile "$ZSF_SRC" "$ZSF_OUT"
+else
+	echo "==> Skipping zombie_spawn_fix (no source at third_party/)"
 fi
 
-if grep -qiE "^.*: (warning|error) [0-9]+" "$log"; then
-	echo "BUILD FAILED: spcomp reported warnings or errors (zero-warning build required)." >&2
-	exit 1
-fi
-
-[ -s "$OUT" ] || { echo "BUILD FAILED: $OUT was not produced." >&2; exit 1; }
-
-echo "==> OK: $OUT"
+echo "==> Build complete"

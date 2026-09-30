@@ -372,21 +372,32 @@ step_companions() {
         fetch_file "${FB_RAW}/${p}/gamedata/${p}.txt" "${SM_DIR}/gamedata/${p}.txt"
     done
 
-    # --- zombie_spawn_fix: cannot be automated ------------------------------
+    # --- zombie_spawn_fix: shipped in this repo, not downloadable -------------
     # It is published only as an AlliedModders forum attachment (thread 333351),
     # and that site sits behind a Cloudflare challenge, so a scripted download
-    # gets an HTML challenge page instead of the plugin. It must be fetched by
-    # hand in a browser. Source Scramble, which it needs, is already installed
-    # above, so dropping the files in is all that is left.
-    if [[ -s "${SM_DIR}/plugins/zombie_spawn_fix.smx" ]]; then
-        info "zombie_spawn_fix already present, leaving it alone"
+    # gets an HTML challenge page instead of the plugin. The .sp and its gamedata
+    # are therefore committed under third_party/, build.sh compiles the .smx into
+    # plugins/, and both are installed from the checkout here. Its Source Scramble
+    # dependency is installed above.
+    local zsf_smx="${REPO_ROOT}/plugins/zombie_spawn_fix.smx"
+    local zsf_gd="${REPO_ROOT}/third_party/zombie_spawn_fix/gamedata/zombie_spawn_fix.txt"
+
+    if [[ -s "${zsf_smx}" && -s "${zsf_gd}" ]]; then
+        install -D -o "${STEAM_USER}" -g "${STEAM_USER}" -m 644 \
+            "${zsf_smx}" "${SM_DIR}/plugins/zombie_spawn_fix.smx"
+        install -D -o "${STEAM_USER}" -g "${STEAM_USER}" -m 644 \
+            "${zsf_gd}" "${SM_DIR}/gamedata/zombie_spawn_fix.txt"
+        info "installed zombie_spawn_fix (plugin + gamedata) from the checkout"
+        info "  it memory-patches the game: check errors_*.log for \"Failed to verify patch\""
+    elif [[ -s "${SM_DIR}/plugins/zombie_spawn_fix.smx" ]]; then
+        info "zombie_spawn_fix already on the server, leaving it alone"
     else
-        warn "zombie_spawn_fix NOT installed - it is a Cloudflare-protected forum
-    attachment and cannot be downloaded by script. Install it by hand:
-      1. Open https://forums.alliedmods.net/showthread.php?t=333351 in a browser
-      2. Download the latest zombie_spawn_fix .smx and its gamedata .txt
-      3. Copy them to ${SM_DIR}/plugins/ and ${SM_DIR}/gamedata/
-      4. chown ${STEAM_USER}:${STEAM_USER} on both, then restart l4d2
+        warn "zombie_spawn_fix NOT installed. Expected both of:
+      ${zsf_smx}
+      ${zsf_gd}
+    The .smx is produced by ./build.sh from the .sp under third_party/. Run
+    build.sh first, or copy both files onto the server by hand:
+      ${SM_DIR}/plugins/  and  ${SM_DIR}/gamedata/
     Source Scramble (its dependency) is already installed."
     fi
 }
