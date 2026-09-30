@@ -134,9 +134,10 @@ step_packages() {
     apt-get update -qq
 
     # srcds is a 32-bit binary: lib32gcc-s1, lib32stdc++6 and libc6-i386 are required.
-    # unzip is beyond CLAUDE.md's list, but step_companions needs it to lift the
-    # MoYu plugins out of their release zip.
-    local pkgs=(lib32gcc-s1 lib32stdc++6 libc6-i386 curl tar unzip screen sqlite3 ca-certificates)
+    # Beyond CLAUDE.md's list: unzip, so step_companions can lift the MoYu plugins
+    # out of their release zip; and sudo, which the Debian 12 standard LXC template
+    # does NOT ship and which deploy_plugin.sh needs for `sudo -n systemctl restart`.
+    local pkgs=(lib32gcc-s1 lib32stdc++6 libc6-i386 curl tar unzip sudo screen sqlite3 ca-certificates)
     local missing=()
     local p
     for p in "${pkgs[@]}"; do
@@ -164,6 +165,54 @@ step_user() {
     fi
     install -d -o "${STEAM_USER}" -g "${STEAM_USER}" -m 755 \
         "${STEAM_HOME}" "${STEAMCMD_DIR}" "${CACHE_DIR}" "${SRV_DIR}"
+}
+
+# ---------------------------------------------------------------------------
+# Deploy access - what deploy_plugin.sh needs to work from a workstation
+# ---------------------------------------------------------------------------
+# deploy_plugin.sh connects as steam@ and runs `sudo -n systemctl restart l4d2`.
+# Neither works on a fresh container: the Debian 12 LXC template ships no sudo
+# (now installed in step 1/2), and the steam user has no authorized_keys. Both
+# are set up here so a deploy works straight after setup.
+step_deploy_access() {
+    log "Deploy access: steam SSH key + scoped sudo rule"
+
+    # sudo rule, deliberately scoped to this one unit rather than blanket root.
+    local sudoers="/etc/sudoers.d/steam-l4d2"
+    cat > "${sudoers}" <<SUDOERS
+# Installed by deploy/setup_lxc.sh so deploy_plugin.sh can restart the server.
+# Scoped to the l4d2 unit on purpose - this is NOT general root access.
+${STEAM_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart l4d2, /usr/bin/systemctl start l4d2, /usr/bin/systemctl stop l4d2, /usr/bin/systemctl status l4d2
+SUDOERS
+    chmod 440 "${sudoers}"
+    # Never leave a broken sudoers file behind - it can lock the box out of sudo.
+    if visudo -c -f "${sudoers}" >/dev/null 2>&1; then
+        info "installed ${sudoers} (restart/start/stop/status of l4d2 only)"
+    else
+        rm -f "${sudoers}"
+        die "generated sudoers file failed validation and was removed"
+    fi
+
+    # SSH key for steam. DEPLOY_PUBKEY wins; otherwise inherit root's keys, which
+    # is how a Proxmox-created container already has the operator's key.
+    install -d -o "${STEAM_USER}" -g "${STEAM_USER}" -m 700 "${STEAM_HOME}/.ssh"
+    local authkeys="${STEAM_HOME}/.ssh/authorized_keys"
+
+    if [[ -n "${DEPLOY_PUBKEY:-}" ]]; then
+        printf '%s\n' "${DEPLOY_PUBKEY}" > "${authkeys}"
+        info "steam authorized_keys written from \$DEPLOY_PUBKEY"
+    elif [[ -s /root/.ssh/authorized_keys ]]; then
+        cp /root/.ssh/authorized_keys "${authkeys}"
+        info "steam authorized_keys inherited from root"
+    else
+        warn "no SSH key for ${STEAM_USER}: \$DEPLOY_PUBKEY is unset and
+    /root/.ssh/authorized_keys is empty or missing. deploy_plugin.sh will not be
+    able to log in until you add a public key to ${authkeys}."
+        touch "${authkeys}"
+    fi
+
+    chown "${STEAM_USER}:${STEAM_USER}" "${authkeys}"
+    chmod 600 "${authkeys}"
 }
 
 # ---------------------------------------------------------------------------
@@ -624,6 +673,7 @@ Installed:
   Repo configs                          cfg/server.cfg, cfg/sourcemod/*.cfg
   Coop human-infected settings          ${SM_DIR}/data/l4dinfectedbots/coop.cfg (backup: coop.cfg.upstream)
   systemd unit                          ${UNIT_FILE} (enabled, not started)
+  Deploy access                         ${STEAM_HOME}/.ssh/authorized_keys + /etc/sudoers.d/steam-l4d2
 
 Next commands:
   1. Set a real rcon password:
@@ -662,6 +712,7 @@ main() {
     step_repo_configs
     step_databases_cfg
     step_systemd
+    step_deploy_access
     step_firewall
     chown -R "${STEAM_USER}:${STEAM_USER}" "${SRV_DIR}"
     summary
