@@ -468,8 +468,8 @@ step_coop_config() {
     local -a kvs=(
         "coop_versus_enable=1"            # humans may join infected in coop
         "coop_versus_join_access="        # empty = everyone (upstream default "z" = root admin only)
-        "coop_versus_human_limit=1"       # one human infected slot
-        "coop_versus_tank_playable=0"     # humans may not play Tank
+        "coop_versus_human_limit=2"       # two simultaneous human infected slots
+        "coop_versus_tank_playable=0"     # Tank off here; coop_finale.cfg turns it on
         "coop_versus_spawn_time_min=10.0" # match l4d2_invasion_respawn (upstream clamps to a 3.0s floor)
         "coop_versus_spawn_time_max=10.0"
         "coop_versus_announce=1"          # upstream default
@@ -503,6 +503,45 @@ step_coop_config() {
         WARNINGS+=("coop.cfg: ${#not_found[@]} key(s) not found and not set: ${not_found[*]}")
     else
         info "all coop_versus_* keys applied"
+    fi
+
+    step_coop_finale_config "${cfg}"
+}
+
+# ---------------------------------------------------------------------------
+# coop_finale.cfg - the "Tanks are playable" variant of coop.cfg
+# ---------------------------------------------------------------------------
+# l4d2_invasion grants Tank access only during the finale. coop_versus_tank_playable
+# is a KeyValues key with no cvar behind it, so it cannot be flipped live - but
+# l4d_infectedbots_read_data has a change hook that reloads the whole data config.
+# The plugin therefore switches between two files that differ in exactly that one
+# key. This generates the second one from the first, so they cannot drift.
+step_coop_finale_config() {
+    local src="$1"
+    local dst="${SM_DIR}/data/l4dinfectedbots/coop_finale.cfg"
+
+    log "Generating coop_finale.cfg (Tank-playable variant of coop.cfg)"
+
+    if ! grep -qE '^[[:space:]]*"coop_versus_tank_playable"' "${src}"; then
+        warn "coop_versus_tank_playable not found in $(basename "${src}"), so
+    coop_finale.cfg cannot be generated. Finale Tank access will not work until
+    that key exists and this script is re-run."
+        return 0
+    fi
+
+    sed 's|^\([[:space:]]*\)"coop_versus_tank_playable"\([[:space:]]*\)"0"|\1"coop_versus_tank_playable"\2"1"|' \
+        "${src}" > "${dst}.tmp"
+
+    # The two files must differ in nothing but that key, or switching configs
+    # mid-finale would quietly change spawn times, limits or access as well.
+    if diff <(grep -v 'coop_versus_tank_playable' "${src}") \
+            <(grep -v 'coop_versus_tank_playable' "${dst}.tmp") >/dev/null; then
+        install -o "${STEAM_USER}" -g "${STEAM_USER}" -m 644 "${dst}.tmp" "${dst}"
+        rm -f "${dst}.tmp"
+        info "wrote $(basename "${dst}") ($(grep -c '"coop_versus_tank_playable"[[:space:]]*"1"' "${dst}") blocks with Tank enabled)"
+    else
+        rm -f "${dst}.tmp"
+        die "generated coop_finale.cfg differs from coop.cfg by more than coop_versus_tank_playable - refusing to install it"
     fi
 }
 
