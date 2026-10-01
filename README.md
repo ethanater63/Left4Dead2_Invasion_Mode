@@ -136,6 +136,8 @@ Created with `CreateConVar` and written to `cfg/sourcemod/l4d2_invasion.cfg` by 
 | `l4d2_invasion_cooldown` | `600` | Seconds before the same SteamID can invade again |
 | `l4d2_invasion_optin_ratio` | `0.5` | Fraction of human survivors who must have `!invadable` on |
 | `l4d2_invasion_max_invaders` | `1` | Max simultaneous human invaders |
+| `l4d2_invasion_tank_finale` | `1` | `1` = invaders may become the Tank during the finale only, `0` = never |
+| `l4d2_invasion_menu` | `1` | `1` = offer the side-select menu on each player's first spawn of the round |
 
 **All 8 apply live.** Each has an `OnConVarChanged` hook, so `sm_cvar l4d2_invasion_lives 3` takes effect on the running invasion (on its next death, for the lives check) with no reload. Editing `cfg/sourcemod/l4d2_invasion.cfg` only matters at load time.
 
@@ -147,6 +149,7 @@ Caveat: `l4d2_invasion_respawn` does not actually control the coop respawn delay
 
 | Command | Access | Effect |
 |---|---|---|
+| `!invade` / `sm_invade` | anyone | Reopen the side-select menu (survivor / invader) |
 | `!invadable` / `sm_invadable` | survivors only | Toggle your opt-in; prints the opted-in count to everyone |
 | `!invstats` / `sm_invstats` | anyone | Your lifetime totals |
 | `!invtop` / `sm_invtop` | anyone | Top 10 invaders by kills |
@@ -350,3 +353,34 @@ Only the first three are actually redistributed in this repo. The rest are downl
 | Metamod:Source, SourceMod | no — downloaded at install | their own terms |
 
 **Caveat on `zombie_spawn_fix`.** Its source carries **no license header**, and its author (sorallll) has no public repos, so there is no upstream license file to point at. AlliedModders plugins are GPL by convention and it is freely distributed on [thread 333351](https://forums.alliedmods.net/showthread.php?t=333351), but that convention is not a licence grant in writing. It is vendored here only because Cloudflare makes it undownloadable by script — it is not our code, and we claim nothing over it. If you want the repo unambiguously clean, delete `third_party/zombie_spawn_fix/` and `plugins/zombie_spawn_fix.smx`; `build.sh` skips it when absent and nothing else depends on it.
+
+---
+
+## Choosing a side
+
+By default (`l4d2_invasion_menu 1`) every player is offered a menu on their first spawn of the round, so picking a side needs no chat command:
+
+```
+L4D2 INVASION - choose your side
+  1. Survivor - open to invasion
+  2. Survivor - no invasions
+  3. INVADE  (10 lives / 6:00)
+```
+
+`!invade` reopens it at any time.
+
+**The opt-in is folded into the survivor choices.** Previously people had to remember `!invadable` as a separate step, and forgetting it made invasions look broken — the first live session produced three `Join rejected ... Invasions are closed` entries before anyone worked it out. `!invadable` still works and still toggles the same flag.
+
+**The INVADE option is greyed out with the reason when it is unavailable**, instead of letting someone join the infected team and get bounced to spectator a tenth of a second later:
+
+| Shown | Meaning |
+|---|---|
+| `INVADE (needs another survivor)` | you are the only human survivor, so there would be nobody to invade |
+| `INVADE (needs 2 more survivors to opt in)` | the opt-in ratio is not met |
+| `INVADE (slots full, 2/2)` | `l4d2_invasion_max_invaders` reached |
+| `INVADE (available in 1:23)` | your cooldown is still running |
+| `INVADE (already invading)` | you have a session open |
+
+`CanInvade()` mirrors the checks in `Timer_CheckJoin` in the same order, and judges the opt-in ratio against the survivor count **after** the player would leave — which is what the real gate sees. Selecting INVADE re-checks before acting, since the menu may have been open a while.
+
+Choosing INVADE runs `sm_ji`, so l4dinfectedbots still owns the actual team move and there remains exactly one code path for starting an invasion.
