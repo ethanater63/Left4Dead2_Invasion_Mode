@@ -75,7 +75,10 @@ ConVar g_cvMaxInvaders;
 ConVar g_cvTankFinaleOnly;
 ConVar g_cvMenu;
 
+ConVar g_cvForceDifficulty;
+
 ConVar g_cvIbReadData;      // l4dinfectedbots' own cvar, looked up at load
+ConVar g_cvZDifficulty;     // the game's z_difficulty, looked up at load
 
 bool  g_bEnable;
 int   g_iLives;
@@ -88,6 +91,7 @@ int   g_iMaxInvaders;
 bool  g_bTankFinaleOnly;
 bool  g_bTankEnabled;       // whether the finale data config is currently loaded
 bool  g_bMenuEnabled;
+char  g_sForceDifficulty[16];   // empty = leave z_difficulty alone
 
 bool g_bOptIn[MAXPLAYERS + 1];
 bool g_bMenuShown[MAXPLAYERS + 1];      // side menu already offered this round
@@ -128,6 +132,9 @@ public void OnPluginStart()
 	// l4dinfectedbots may load after us, so this can be null here; OnAllPluginsLoaded
 	// picks it up. Without it, Tank swapping is skipped rather than erroring.
 	g_cvIbReadData = FindConVar(IB_DATA_CVAR);
+	g_cvZDifficulty = FindConVar("z_difficulty");
+	if (g_cvZDifficulty == null)
+		LogError("Could not find \"z_difficulty\" - l4d2_invasion_force_difficulty will do nothing.");
 }
 
 public void OnAllPluginsLoaded()
@@ -159,6 +166,7 @@ void CreateCvars()
 	g_cvMaxInvaders = CreateConVar("l4d2_invasion_max_invaders", "1",    "Max simultaneous human invaders.", FCVAR_NOTIFY, true, 1.0);
 	g_cvTankFinaleOnly = CreateConVar("l4d2_invasion_tank_finale", "1", "1 = invaders can play Tank during the finale only, 0 = never.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvMenu = CreateConVar("l4d2_invasion_menu", "1", "1 = offer the side-select menu on each player's first spawn of the round.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvForceDifficulty = CreateConVar("l4d2_invasion_force_difficulty", "", "Re-apply this difficulty on every round start. Easy/Normal/Hard/Impossible (\"Expert\" is accepted and means Impossible). Empty = leave z_difficulty alone.", FCVAR_NOTIFY);
 
 	g_cvEnable.AddChangeHook(OnCvarChanged);
 	g_cvLives.AddChangeHook(OnCvarChanged);
@@ -170,6 +178,7 @@ void CreateCvars()
 	g_cvMaxInvaders.AddChangeHook(OnCvarChanged);
 	g_cvTankFinaleOnly.AddChangeHook(OnCvarChanged);
 	g_cvMenu.AddChangeHook(OnCvarChanged);
+	g_cvForceDifficulty.AddChangeHook(OnCvarChanged);
 
 	AutoExecConfig(true, "l4d2_invasion");
 	CacheCvars();
@@ -230,10 +239,71 @@ void CacheCvars()
 	g_iMaxInvaders = g_cvMaxInvaders.IntValue;
 	g_bTankFinaleOnly = g_cvTankFinaleOnly.BoolValue;
 	g_bMenuEnabled = g_cvMenu.BoolValue;
+	CacheForcedDifficulty();
 
 	// Turning the feature off mid-campaign must not strand the finale config.
 	if (!g_bTankFinaleOnly && g_bTankEnabled)
 		SetTankPlayable(false);
+}
+
+// ---------------------------------------------------------------------------
+// Forced difficulty
+// ---------------------------------------------------------------------------
+// z_difficulty does not stick on a dedicated server. Difficulty normally comes
+// from the lobby, and with direct-IP joins there is no lobby, so the Director
+// resets it to Normal as the map loads - after server.cfg has already run. The
+// only reliable fix is to re-apply it once the map is up, which is what this
+// does, on every round start.
+
+void CacheForcedDifficulty()
+{
+	char raw[16];
+	g_cvForceDifficulty.GetString(raw, sizeof(raw));
+	TrimString(raw);
+
+	if (raw[0] == '\0')
+	{
+		g_sForceDifficulty[0] = '\0';
+		return;
+	}
+
+	// "Expert" is the name the game's own UI uses; the cvar wants "Impossible".
+	// Accepting both avoids setting a value that silently does nothing.
+	if (StrEqual(raw, "Expert", false))
+		strcopy(raw, sizeof(raw), "Impossible");
+
+	if (!StrEqual(raw, "Easy", false) && !StrEqual(raw, "Normal", false)
+		&& !StrEqual(raw, "Hard", false) && !StrEqual(raw, "Impossible", false))
+	{
+		LogError("l4d2_invasion_force_difficulty: \"%s\" is not a valid difficulty. Use Easy, Normal, Hard or Impossible (or Expert). Ignoring it.", raw);
+		g_sForceDifficulty[0] = '\0';
+		return;
+	}
+
+	strcopy(g_sForceDifficulty, sizeof(g_sForceDifficulty), raw);
+	ApplyForcedDifficulty();
+}
+
+void ApplyForcedDifficulty()
+{
+	if (g_sForceDifficulty[0] == '\0' || g_cvZDifficulty == null)
+		return;
+
+	char current[16];
+	g_cvZDifficulty.GetString(current, sizeof(current));
+	if (StrEqual(current, g_sForceDifficulty, false))
+		return;
+
+	g_cvZDifficulty.SetString(g_sForceDifficulty);
+	DebugLog("Difficulty re-applied: \"%s\" -> \"%s\"", current, g_sForceDifficulty);
+}
+
+// round_start usually lands after the Director has set its own value, but the
+// ordering is not guaranteed, so check once more a few seconds in.
+Action Timer_ReassertDifficulty(Handle timer)
+{
+	ApplyForcedDifficulty();
+	return Plugin_Stop;
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +928,9 @@ void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	// Offer the side choice again next time each player spawns.
 	for (int i = 1; i <= MAXPLAYERS; i++)
 		g_bMenuShown[i] = false;
+
+	ApplyForcedDifficulty();
+	CreateTimer(5.0, Timer_ReassertDifficulty, _, TIMER_FLAG_NO_MAPCHANGE);
 
 	// A new round means the finale has not started yet, including a finale
 	// restart after a wipe. Revoke Tank access until it triggers again.
