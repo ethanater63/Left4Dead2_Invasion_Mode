@@ -64,7 +64,7 @@ See [Build](#build) below.
 L4D2_HOST=steam@l4d2.local deploy/deploy_plugin.sh
 ```
 
-`L4D2_HOST` defaults to `steam@l4d2.local`. The script rsyncs `plugins/*.smx` into `addons/sourcemod/plugins/`, puts the cfg files in place, restarts `l4d2.service`, and tails the last 50 lines of the SourceMod error log so a load failure is visible immediately.
+`L4D2_HOST` defaults to `steam@l4d2.local`; if that name doesn't resolve, point it at an SSH alias or `steam@<ip>`. The script copies `plugins/*.smx` (with rsync, or with scp when rsync is missing, e.g. in Git Bash on Windows) into `addons/sourcemod/plugins/`, puts the cfg files in place, restarts `l4d2.service`, and tails the last 50 lines of the SourceMod error log so a load failure is visible immediately.
 
 ### 4. Database registration
 
@@ -328,7 +328,7 @@ l4d2-invasion/
 │   └── l4dinfectedbots_coop.cfg          (merge fragment for data/l4dinfectedbots/coop.cfg)
 └── deploy/
     ├── setup_lxc.sh                      (runs inside a Debian 12 LXC; idempotent)
-    └── deploy_plugin.sh                  (rsync .smx/cfg, restart l4d2, tail error log)
+    └── deploy_plugin.sh                  (copy .smx/cfg, restart l4d2, tail error log)
 ```
 
 ---

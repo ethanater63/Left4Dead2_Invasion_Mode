@@ -10,8 +10,9 @@
 #     L4D2_HOST   ssh target        (default: steam@l4d2.local)
 #     L4D2_PATH   game dir on host  (default: /home/steam/l4d2/left4dead2)
 #
-# Requires: rsync and ssh locally, key-based ssh to L4D2_HOST, and passwordless
-# sudo on the host for `systemctl restart l4d2`.
+# Requires: ssh and scp locally (rsync is used when present; without it, e.g. in
+# Git Bash on Windows, files are copied with scp instead), key-based ssh to
+# L4D2_HOST, and passwordless sudo on the host for `systemctl restart l4d2`.
 #
 # Implements CLAUDE.md Step 5.
 # ============================================================================
@@ -35,8 +36,27 @@ die()  { printf '\033[1;31m!!  FATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
-command -v rsync >/dev/null 2>&1 || die "rsync is not installed locally."
 command -v ssh   >/dev/null 2>&1 || die "ssh is not installed locally."
+
+if command -v rsync >/dev/null 2>&1; then
+    HAVE_RSYNC=1
+else
+    HAVE_RSYNC=0
+    command -v scp >/dev/null 2>&1 || die "neither rsync nor scp is installed locally."
+    warn "rsync not found - copying with scp (every file is sent, not just changed ones)"
+fi
+
+# push SRC... DEST - copy local files to a remote path. rsync skips unchanged
+# files; scp sends everything, which is fine for a handful of small files.
+push() {
+    if ((HAVE_RSYNC)); then
+        rsync -av --checksum "$@"
+    else
+        local f
+        for f in "${@:1:$#-1}"; do info "$(basename "$f")"; done
+        scp -q "$@"
+    fi
+}
 
 if [[ ! -f "${REPO_ROOT}/plugins/l4d2_invasion.smx" ]]; then
     die "plugins/l4d2_invasion.smx not found.
@@ -54,19 +74,19 @@ ssh -o BatchMode=yes "${L4D2_HOST}" "test -d '${SM_PATH}/plugins'" \
 # ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
-log "rsync plugins/*.smx -> addons/sourcemod/plugins/"
-rsync -av --checksum "${REPO_ROOT}"/plugins/*.smx "${L4D2_HOST}:${SM_PATH}/plugins/"
+log "copy plugins/*.smx -> addons/sourcemod/plugins/"
+push "${REPO_ROOT}"/plugins/*.smx "${L4D2_HOST}:${SM_PATH}/plugins/"
 
 # ---------------------------------------------------------------------------
 # Third-party gamedata
 # ---------------------------------------------------------------------------
-# zombie_spawn_fix is built from third_party/ into plugins/, so the rsync above
+# zombie_spawn_fix is built from third_party/ into plugins/, so the copy above
 # already ships its .smx - but it SetFailStates without its gamedata, so that
 # has to go too. Every other companion plugin is installed server-side by
 # setup_lxc.sh along with its own gamedata, so nothing else belongs here.
 if compgen -G "${REPO_ROOT}/third_party/*/gamedata/*.txt" >/dev/null; then
-    log "rsync third_party gamedata -> addons/sourcemod/gamedata/"
-    rsync -av --checksum "${REPO_ROOT}"/third_party/*/gamedata/*.txt \
+    log "copy third_party gamedata -> addons/sourcemod/gamedata/"
+    push "${REPO_ROOT}"/third_party/*/gamedata/*.txt \
         "${L4D2_HOST}:${SM_PATH}/gamedata/"
 else
     info "no third_party gamedata to deploy"
@@ -75,16 +95,16 @@ fi
 # ---------------------------------------------------------------------------
 # Configs
 # ---------------------------------------------------------------------------
-log "rsync configs"
+log "copy configs"
 if [[ -f "${REPO_ROOT}/cfg/server.cfg" ]]; then
-    rsync -av --checksum "${REPO_ROOT}/cfg/server.cfg" "${L4D2_HOST}:${L4D2_PATH}/cfg/"
+    push "${REPO_ROOT}/cfg/server.cfg" "${L4D2_HOST}:${L4D2_PATH}/cfg/"
 else
     warn "cfg/server.cfg missing locally - not deployed"
 fi
 
 if compgen -G "${REPO_ROOT}/cfg/sourcemod/*.cfg" >/dev/null; then
     ssh -o BatchMode=yes "${L4D2_HOST}" "mkdir -p '${L4D2_PATH}/cfg/sourcemod'"
-    rsync -av --checksum "${REPO_ROOT}"/cfg/sourcemod/*.cfg \
+    push "${REPO_ROOT}"/cfg/sourcemod/*.cfg \
         "${L4D2_HOST}:${L4D2_PATH}/cfg/sourcemod/"
 else
     warn "no cfg/sourcemod/*.cfg locally - not deployed"
@@ -104,7 +124,7 @@ else
     info "entry absent - appending it"
     # Ship the snippet, then insert it before the LAST closing brace (the end of
     # the "Databases" section), skipping the snippet's comment and blank lines.
-    rsync -a "${SNIPPET}" "${L4D2_HOST}:/tmp/l4d2_invasion_db.snippet"
+    push "${SNIPPET}" "${L4D2_HOST}:/tmp/l4d2_invasion_db.snippet"
     ssh -o BatchMode=yes "${L4D2_HOST}" \
         "DB='${REMOTE_DB}' SNIP=/tmp/l4d2_invasion_db.snippet bash -s" <<'REMOTE'
 set -euo pipefail
