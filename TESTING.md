@@ -285,6 +285,26 @@ During an active invasion run `sm_cvar l4d2_invasion_lives 3` (with the invader 
 
 ---
 
+### [ ] 14. `l4d2_invasion_time 0` turns off the time limit
+
+Set `sm_cvar l4d2_invasion_time 0`, open the side menu, start an invasion, and play for more than 6 minutes. Run `sm_inv_status`.
+
+**Pass condition:** the menu entry reads `INVADE  (N lives)` with no clock; the rules hint says `No time limit`; the HUD shows only `Lives: X/Y`; `sm_inv_status` shows `Time left: no limit`; the invasion never ends with `Time's up` and only ends on the last death. Reset the cvar to 360 afterwards.
+
+**Result:**
+
+---
+
+### [ ] 15. Leaving the infected team ends the invasion
+
+Start an invasion, take some kills, then switch to survivor (side menu or team change). Repeat once switching to spectator.
+
+**Pass condition:** about half a second after the switch, chat shows `[INVASION] <name>'s invasion ended (Left the infected team). ...`; the player is **not** kicked and stays on the team they picked; a new `invasions` row is written; `sm_inv_status` no longer lists them, so the slot is free for another invader; trying to invade again is blocked by the cooldown message. A normal map transition mid-invasion must **not** end the invasion this way (re-check item 8).
+
+**Result:**
+
+---
+
 ## What to send back
 
 For any check that fails, send all four of these. A report without them is not actionable.

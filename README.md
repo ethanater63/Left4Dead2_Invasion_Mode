@@ -130,7 +130,7 @@ Created with `CreateConVar` and written to `cfg/sourcemod/l4d2_invasion.cfg` by 
 |---|---|---|
 | `l4d2_invasion_enable` | `1` | Master switch |
 | `l4d2_invasion_lives` | `10` | Deaths allowed per invasion |
-| `l4d2_invasion_time` | `360` | Invasion length in seconds (active time only, see timer rules) |
+| `l4d2_invasion_time` | `360` | Invasion length in seconds (active time only, see timer rules). `0` = no time limit; lives are the only budget |
 | `l4d2_invasion_respawn` | `10.0` | Invader respawn time in seconds |
 | `l4d2_invasion_end_action` | `1` | 0 = move to spectator, 1 = kick |
 | `l4d2_invasion_cooldown` | `600` | Seconds before the same SteamID can invade again |
@@ -139,7 +139,9 @@ Created with `CreateConVar` and written to `cfg/sourcemod/l4d2_invasion.cfg` by 
 | `l4d2_invasion_tank_finale` | `1` | `1` = invaders may become the Tank during the finale only, `0` = never |
 | `l4d2_invasion_menu` | `1` | `1` = offer the side-select menu on each player's first spawn of the round |
 
-**All 8 apply live.** Each has an `OnConVarChanged` hook, so `sm_cvar l4d2_invasion_lives 3` takes effect on the running invasion (on its next death, for the lives check) with no reload. Editing `cfg/sourcemod/l4d2_invasion.cfg` only matters at load time.
+**All 10 apply live.** Each has an `OnConVarChanged` hook, so `sm_cvar l4d2_invasion_lives 3` takes effect on the running invasion (on its next death, for the lives check) with no reload. Editing `cfg/sourcemod/l4d2_invasion.cfg` only matters at load time.
+
+**Leaving the infected team ends the invasion.** If an invader switches to survivor or spectator mid-invasion, the invasion ends with the reason `Left the infected team`: stats are saved, the cooldown starts and the slot frees up. The player stays on the team they picked. A map transition does not count as leaving, so sessions still carry over between maps.
 
 Caveat: `l4d2_invasion_respawn` does not actually control the coop respawn delay — see [Known issues (a)](#a-l4d_setplayerspawntime-does-not-control-the-coop-respawn-delay).
 

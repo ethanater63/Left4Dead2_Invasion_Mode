@@ -158,7 +158,7 @@ void CreateCvars()
 {
 	g_cvEnable      = CreateConVar("l4d2_invasion_enable",       "1",    "Master switch for invasion mode.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvLives       = CreateConVar("l4d2_invasion_lives",        "10",   "Deaths allowed per invasion.", FCVAR_NOTIFY, true, 1.0);
-	g_cvTime        = CreateConVar("l4d2_invasion_time",         "360",  "Invasion length in seconds of active time.", FCVAR_NOTIFY, true, 1.0);
+	g_cvTime        = CreateConVar("l4d2_invasion_time",         "360",  "Invasion length in seconds of active time. 0 = no time limit, lives only.", FCVAR_NOTIFY, true, 0.0);
 	g_cvRespawn     = CreateConVar("l4d2_invasion_respawn",      "10.0", "Invader respawn time in seconds.", FCVAR_NOTIFY, true, 0.0);
 	g_cvEndAction   = CreateConVar("l4d2_invasion_end_action",   "1",    "When the budget runs out: 0 = move to spectator, 1 = kick.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvCooldown    = CreateConVar("l4d2_invasion_cooldown",     "600",  "Seconds before the same SteamID can invade again.", FCVAR_NOTIFY, true, 0.0);
@@ -617,9 +617,16 @@ void ShowSideMenu(int client)
 	char display[128];
 	if (CanInvade(client, reason, sizeof(reason)))
 	{
-		char clock[16];
-		FormatClock(g_iTime, clock, sizeof(clock));
-		Format(display, sizeof(display), "INVADE  (%d lives / %s)", g_iLives, clock);
+		if (g_iTime > 0)
+		{
+			char clock[16];
+			FormatClock(g_iTime, clock, sizeof(clock));
+			Format(display, sizeof(display), "INVADE  (%d lives / %s)", g_iLives, clock);
+		}
+		else
+		{
+			Format(display, sizeof(display), "INVADE  (%d lives)", g_iLives);
+		}
 		menu.AddItem("invade", display);
 	}
 	else
@@ -738,16 +745,47 @@ void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
 {
 	if (event.GetBool("disconnect") || event.GetBool("isbot"))
 		return;
-	if (event.GetInt("team") != TEAM_INFECTED)
-		return;
 
 	int userid = event.GetInt("userid");
 	int client = GetClientOfUserId(userid);
 	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
 		return;
 
+	// Leaving the infected team has to end the invasion. Without this the
+	// session stays open, keeps counting against max_invaders, and - now that
+	// the time budget can be disabled - never closes at all, so the slot is
+	// held forever by someone who is back to playing survivor.
+	if (event.GetInt("team") != TEAM_INFECTED)
+	{
+		InvasionSession session;
+		if (GetSession(client, session))
+			CreateTimer(0.5, Timer_CheckLeave, userid, TIMER_FLAG_NO_MAPCHANGE);
+		return;
+	}
+
 	// Run the gate after l4dinfectedbots has finished its own join handling.
 	CreateTimer(0.1, Timer_CheckJoin, userid, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+// Confirm the player really left rather than flickering teams. The timer is
+// NO_MAPCHANGE so it is dropped during a transition, which keeps a session
+// alive across maps instead of ending it on the way through.
+Action Timer_CheckLeave(Handle timer, int userid)
+{
+	int client = GetClientOfUserId(userid);
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+		return Plugin_Stop;
+	if (GetClientTeam(client) == TEAM_INFECTED)
+		return Plugin_Stop;
+
+	InvasionSession session;
+	if (!GetSession(client, session))
+		return Plugin_Stop;
+
+	// applyEndAction is false: they have already picked a team, so moving them
+	// again would undo their own choice.
+	FinishInvasion(client, "Left the infected team", false);
+	return Plugin_Stop;
 }
 
 Action Timer_CheckJoin(Handle timer, int userid)
@@ -821,9 +859,14 @@ void StartInvasion(int client)
 
 void ShowRulesHint(int client)
 {
+	if (g_iTime <= 0)
+	{
+		PrintHintText(client, "YOU ARE THE INVADER\n%d lives. Every death counts.\nNo time limit - play them how you like.", g_iLives);
+		return;
+	}
+
 	char clock[16];
 	FormatClock(g_iTime, clock, sizeof(clock));
-
 	PrintHintText(client, "YOU ARE THE INVADER\n%d lives or %s of play, whichever runs out first.\nEvery death counts. Time pauses between rounds.",
 		g_iLives, clock);
 }
@@ -961,7 +1004,8 @@ Action Timer_Invasion(Handle timer)
 		session.secondsElapsed++;
 		SetSession(i, session);
 
-		if (session.secondsElapsed >= g_iTime)
+		// g_iTime 0 means lives are the only budget.
+		if (g_iTime > 0 && session.secondsElapsed >= g_iTime)
 		{
 			EndInvasion(i, "Time's up");
 			continue;
@@ -975,13 +1019,18 @@ Action Timer_Invasion(Handle timer)
 
 void ShowInvaderHud(int client, InvasionSession session)
 {
-	char clock[16];
-	FormatClock(g_iTime - session.secondsElapsed, clock, sizeof(clock));
-
 	int livesLeft = g_iLives - session.livesUsed;
 	if (livesLeft < 0)
 		livesLeft = 0;
 
+	if (g_iTime <= 0)
+	{
+		PrintHintText(client, "Lives: %d/%d", livesLeft, g_iLives);
+		return;
+	}
+
+	char clock[16];
+	FormatClock(g_iTime - session.secondsElapsed, clock, sizeof(clock));
 	PrintHintText(client, "Lives: %d/%d | Time left: %s", livesLeft, g_iLives, clock);
 }
 
@@ -1241,9 +1290,13 @@ Action Cmd_InvStatus(int client, int args)
 			continue;
 
 		found++;
-		FormatClock(g_iTime - session.secondsElapsed, clock, sizeof(clock));
-		PrintToChat(client, "\x05%N\x01 - Lives: \x04%d\x01/\x04%d\x01 | Time left: \x04%s\x01 | Kills: \x04%d\x01 | %s",
-			i, g_iLives - session.livesUsed, g_iLives, clock, session.kills,
+		if (g_iTime > 0)
+			FormatClock(g_iTime - session.secondsElapsed, clock, sizeof(clock));
+		else
+			strcopy(clock, sizeof(clock), "no limit");
+
+		PrintToChat(client, "\x05%N\x01 - Lives: \x04%d\x01/\x04%d\x01 | Time left: \x04%s\x01 | Kills: \x04%d\x01 | Incaps: \x04%d\x01 | %s",
+			i, g_iLives - session.livesUsed, g_iLives, clock, session.kills, session.incaps,
 			IsGhost(i) ? "ghost" : "spawned");
 	}
 
